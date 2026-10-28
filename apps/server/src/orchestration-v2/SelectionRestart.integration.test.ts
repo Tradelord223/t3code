@@ -31,6 +31,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const driver = ProviderDriverKind.make("codex");
@@ -439,6 +440,95 @@ it.live("retries a failed selection restart session open before completing", () 
         projection.providerSessions.find((session) => session.model === replacementSelection.model)
           ?.id,
       );
+    }),
+  ),
+);
+
+it.live("moves a thread off its provider's shared session once sessions are per thread", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const cwd = yield* checkpointWorkspace("selection-restart-shared-migration");
+      const threadId = ThreadId.make("thread:selection-restart-shared-migration");
+      const state = yield* Ref.make<RestartAdapterState>({
+        activeTurn: null,
+        opened: [],
+        started: [],
+        closedSessionCount: 0,
+        failedReplacementOpen: true,
+      });
+      let capabilities = pooledCapabilities;
+      const adapter = makeRestartAdapter(state);
+      const layerRegistry = ProviderAdapterRegistry.layerSingle({
+        ...adapter,
+        getCapabilities: () => Effect.sync(() => capabilities),
+      });
+      const sharedSessionId = IdAllocator.derive.providerSession({ providerInstanceId });
+
+      const sessionIds = yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const sendAndComplete = Effect.fn("sendAndComplete")(function* (text: string) {
+          const completed = yield* eventSink
+            .stream({ threadId, afterSequence: yield* eventSink.latestSequence({ threadId }) })
+            .pipe(
+              Stream.map((stored) => stored.event),
+              Stream.filter(
+                (event) => event.type === "run.updated" && event.payload.status === "completed",
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+              Effect.forkScoped,
+            );
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make(`command:selection-restart-shared-migration:${text}`),
+            threadId,
+            messageId: MessageId.make(`message:selection-restart-shared-migration:${text}`),
+            text,
+            attachments: [],
+            modelSelection: replacementSelection,
+            dispatchMode: { type: "start_immediately" },
+          });
+          yield* Fiber.join(completed);
+          yield* worker.drain();
+          return (yield* orchestrator.getThreadProjection(threadId)).providerThreads[0]
+            ?.providerSessionId;
+        });
+
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("command:selection-restart-shared-migration:create"),
+          threadId,
+          projectId: ProjectId.make("project:selection-restart"),
+          title: "Shared session migration",
+          modelSelection: replacementSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: cwd,
+        });
+        const before = yield* sendAndComplete("first");
+        capabilities = exclusiveCapabilities;
+        const after = yield* sendAndComplete("second");
+        return { before, after };
+      }).pipe(
+        Effect.provide(
+          ProviderReplayHarness.layerWithRegistry(
+            { name: "selection-restart-shared-migration" },
+            layerRegistry,
+          ),
+        ),
+      );
+
+      assert.equal(sessionIds.before, sharedSessionId);
+      assert.isDefined(sessionIds.after);
+      assert.notEqual(sessionIds.after, sharedSessionId);
+      assert.lengthOf((yield* Ref.get(state)).opened, 2);
     }),
   ),
 );
