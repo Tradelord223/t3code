@@ -159,12 +159,12 @@ const layerBeforeUnchangedWriteEventSink = (before: Ref.Ref<Effect.Effect<void>>
     }),
   ).pipe(Layer.provide(layerTestEventSink));
 
-const CodexCapabilities: OrchestrationV2ProviderCapabilities = CodexProviderCapabilitiesV2;
-const ExclusiveCapabilities: OrchestrationV2ProviderCapabilities = {
-  ...CodexCapabilities,
+const ExclusiveCapabilities: OrchestrationV2ProviderCapabilities = CodexProviderCapabilitiesV2;
+const PooledCapabilities: OrchestrationV2ProviderCapabilities = {
+  ...ExclusiveCapabilities,
   sessions: {
-    ...CodexCapabilities.sessions,
-    supportsMultipleProviderThreadsPerSession: false,
+    ...ExclusiveCapabilities.sessions,
+    supportsMultipleProviderThreadsPerSession: true,
   },
 };
 
@@ -213,7 +213,7 @@ function makeProviderSession(input: {
     status: "ready",
     cwd: process.cwd(),
     model: "gpt-5.4",
-    capabilities: input.capabilities ?? CodexCapabilities,
+    capabilities: input.capabilities ?? PooledCapabilities,
     createdAt: input.now,
     updatedAt: input.now,
     lastError: null,
@@ -355,7 +355,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: ProviderInstanceId.make("codex"),
     driver: CODEX_DRIVER,
-    getCapabilities: () => Effect.succeed(options.capabilities ?? CodexCapabilities),
+    getCapabilities: () => Effect.succeed(options.capabilities ?? PooledCapabilities),
     planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
     openSession: (input) =>
       Effect.gen(function* () {

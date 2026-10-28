@@ -237,7 +237,9 @@ const CODEX_CLIENT_CAPABILITIES = {
 
 export const CodexProviderCapabilitiesV2 = {
   sessions: {
-    supportsMultipleProviderThreadsPerSession: true,
+    // One app-server per thread: its tools share the thread's scope, so a memory
+    // kill stops only that thread instead of every Codex thread on the instance.
+    supportsMultipleProviderThreadsPerSession: false,
     supportsModelSwitchInSession: true,
     supportsProviderSwitchingViaHandoff: true,
     supportsRuntimeModeSwitchInSession: true,
@@ -1398,7 +1400,6 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
     name: "codex",
     threadId: input.threadId,
     env: input.env,
-    shared: true,
   });
   const spawnCommand = yield* resolveSpawnCommand(launch.command, launch.args, {
     ...(input.env === undefined ? {} : { env: input.env }),
@@ -1711,7 +1712,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ),
         );
         const initialized = yield* Ref.make(false);
-        // Codex rejects a second initialize on the shared app-server.
+        // Codex rejects a second initialize on one app-server.
         const initializePermit = yield* Semaphore.make(1);
         const ensureInitialized = initializePermit.withPermit(
           Effect.gen(function* () {
@@ -7021,7 +7022,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               ),
           ),
-          // Dropping this connection's subscription lets the shared app-server
+          // Dropping this connection's subscription lets the app-server
           // shut the native thread (and its MCP servers) down once it is idle.
           unloadThread: Effect.fn("CodexAdapterV2.unloadThread")(
             function* (unloadInput) {
