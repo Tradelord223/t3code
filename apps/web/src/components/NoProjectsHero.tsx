@@ -1,5 +1,5 @@
 import { workspaceAreaProps } from "../lib/workspaceFocus";
-import { MessageSquareDashedIcon, PlusIcon } from "lucide-react";
+import { CrosshairIcon, PlusIcon } from "lucide-react";
 
 import { openCommandPalette } from "../commandPaletteBus";
 import { isElectron } from "../env";
@@ -28,16 +28,16 @@ export function NoProjectsHero() {
         <Empty size="hero" className="flex-1">
           <div className="w-full max-w-lg px-8 py-12">
             <EmptyHeader className="max-w-none">
-              <EmptyTitle>What should we work on?</EmptyTitle>
+              <EmptyTitle>Start a red-team engagement</EmptyTitle>
               <EmptyDescription>
                 {scratchTargetEnvironmentId === null
-                  ? "Add a project to start your first thread."
-                  : "Add a project, or start without one."}
+                  ? "Add a target workspace to keep scope, evidence, and agent work together."
+                  : "Add a target workspace, or open a scratch engagement."}
               </EmptyDescription>
               <div className="mt-6 flex justify-center gap-2">
                 <Button size="sm" onClick={() => openCommandPalette({ open: "add-project" })}>
                   <PlusIcon className="size-4" />
-                  Add project
+                  Add target workspace
                 </Button>
                 {scratchTargetEnvironmentId === null ? null : (
                   <Button
@@ -45,8 +45,8 @@ export function NoProjectsHero() {
                     variant="outline"
                     onClick={() => void startScratchThread(scratchTargetEnvironmentId)}
                   >
-                    <MessageSquareDashedIcon className="size-4" />
-                    Start without a project
+                    <CrosshairIcon className="size-4" />
+                    Start scratch engagement
                   </Button>
                 )}
               </div>

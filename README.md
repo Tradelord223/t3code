@@ -1,4 +1,14 @@
-# T3 Code
+# Prime Red Team
+
+Prime Red Team is an experimental red-team operations fork of
+[T3 Code](https://github.com/pingdotgg/t3code). The first cut keeps T3's provider,
+workspace, remote-access, and orchestration foundations while reframing the web
+shell around engagements, target workspaces, evidence, and persistent agent teams.
+
+This branch is intentionally small: it establishes the product identity and the
+first engagement-oriented entry point without changing T3's execution model.
+
+## Upstream foundation
 
 T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
 
