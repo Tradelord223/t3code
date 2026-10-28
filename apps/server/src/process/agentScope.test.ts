@@ -187,30 +187,50 @@ describe("AgentScope service", () => {
     ),
   );
 
-  it.effect(
-    "keeps shared Codex scopes running without attributing their OOM to the launch thread",
-    () =>
-      withFakeSystemd(({ scope, units, calls }) =>
-        Effect.gen(function* () {
-          const agent = yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "a" });
-          expect(agent.args).toContain("--property=OOMPolicy=stop");
-          units.set(unitOf(agent), { activeState: "failed", result: "oom-kill" });
-          expect(yield* scope.oomKilled("a")).toBe(true);
+  it.effect("keeps shared scopes running without attributing their OOM to the launch thread", () =>
+    withFakeSystemd(({ scope, units, calls }) =>
+      Effect.gen(function* () {
+        const agent = yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "a" });
+        expect(agent.args).toContain("--property=OOMPolicy=stop");
+        units.set(unitOf(agent), { activeState: "failed", result: "oom-kill" });
+        expect(yield* scope.oomKilled("a")).toBe(true);
 
-          const codex = yield* launchCodex(scope, "a");
-          expect(codex.args).toContain("--property=OOMPolicy=continue");
-          expect(codex.args).not.toContain("--property=OOMPolicy=stop");
-          expect(codex.args).toContain("--property=TimeoutStopSec=10s");
-          expect(codex.args).toContain("--collect");
-          units.set(unitOf(codex), { activeState: "active", result: "success" });
-          expect(yield* scope.oomKilled("a")).toBe(false);
-          units.set(unitOf(codex), { activeState: "failed", result: "oom-kill" });
-          expect(yield* scope.oomKilled("a")).toBe(false);
-          expect(
-            calls.filter(([, verb, unit]) => verb === "show" && unit === unitOf(codex)),
-          ).toEqual([]);
-        }),
-      ),
+        const shared = yield* scope.wrap({
+          command: "agent",
+          args: [],
+          name: "opencode",
+          threadId: "a",
+          shared: true,
+        });
+        expect(shared.args).toContain("--property=OOMPolicy=continue");
+        expect(shared.args).not.toContain("--property=OOMPolicy=stop");
+        expect(shared.args).toContain("--property=TimeoutStopSec=10s");
+        expect(shared.args).toContain("--collect");
+        units.set(unitOf(shared), { activeState: "active", result: "success" });
+        expect(yield* scope.oomKilled("a")).toBe(false);
+        units.set(unitOf(shared), { activeState: "failed", result: "oom-kill" });
+        expect(yield* scope.oomKilled("a")).toBe(false);
+        expect(
+          calls.filter(([, verb, unit]) => verb === "show" && unit === unitOf(shared)),
+        ).toEqual([]);
+      }),
+    ),
+  );
+
+  it.effect("gives each Codex thread a scope that reports its own OOM kill", () =>
+    withFakeSystemd(({ scope, units }) =>
+      Effect.gen(function* () {
+        const first = yield* launchCodex(scope, "a");
+        const second = yield* launchCodex(scope, "b");
+        expect(unitOf(first)).not.toBe(unitOf(second));
+        expect(first.args).toContain("--property=OOMPolicy=stop");
+        expect(first.args).not.toContain("--collect");
+        units.set(unitOf(first), { activeState: "failed", result: "oom-kill" });
+        units.set(unitOf(second), { activeState: "active", result: "success" });
+        expect(yield* scope.oomKilled("a")).toBe(true);
+        expect(yield* scope.oomKilled("b")).toBe(false);
+      }),
+    ),
   );
 
   it.effect("keeps a running scope while hundreds of other threads launch", () =>
