@@ -16,6 +16,7 @@ import type {
 
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
+import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 import {
   PullRequestProviderError,
   type PullRequestProviderFailure,
@@ -60,9 +61,9 @@ const CAPABILITIES: PullRequestCapabilities = {
 
 const UNAVAILABLE_REQUIREMENT = {
   missing:
-    "No GitHub credential on the server. Set GH_TOKEN, or install the GitHub CLI (https://cli.github.com/) and run `gh auth login`.",
+    "No GitHub credential on the server. Sign in with GitHub in Settings → Source Control, set GH_TOKEN, or install the GitHub CLI (https://cli.github.com/) and run `gh auth login`.",
   unauthenticated:
-    "GitHub has no working credential for this host. Run `gh auth login`, or check the account and hosts in Settings → Source Control.",
+    "GitHub has no working credential for this host. Sign in again in Settings → Source Control, run `gh auth login`, or check the account and hosts there.",
 };
 
 /**
@@ -740,5 +741,5 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.mapError(fail("setThreadResolution"))),
   };
 
-  return provider;
+  return GitHubRequestPolicy.scopeMethodsToRepository(provider);
 });

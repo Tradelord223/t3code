@@ -231,10 +231,14 @@ describe("GitHubRest", () => {
 });
 
 describe("GitHubCredentials", () => {
+  const unexpectedHttp = HttpClient.make((request) =>
+    Effect.die(`Unexpected request to ${request.url}`),
+  );
   const credentialsWith = (run: SourceControlHost.SourceControlHost["Service"]["process"]["run"]) =>
     GitHubCredentials.layer.pipe(
       Layer.provide(TestSourceControlHost.layer({ process: { run } })),
       Layer.provide(NodeCrypto.layer),
+      Layer.provide(Layer.succeed(HttpClient.HttpClient, unexpectedHttp)),
     );
 
   it.effect("does not cache a gh failure that is not about signing in", () => {

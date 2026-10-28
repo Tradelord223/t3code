@@ -183,6 +183,62 @@ export class SourceControlProviderError extends Schema.TaggedError<SourceControl
   }
 }
 
+export const SourceControlSignInInput = Schema.Struct({
+  provider: SourceControlProviderKind,
+  host: TrimmedNonEmptyString,
+});
+export type SourceControlSignInInput = typeof SourceControlSignInInput.Type;
+
+/** A device-flow code the user enters at `verificationUri` in any browser. */
+export const SourceControlSignInPrompt = Schema.Struct({
+  userCode: TrimmedNonEmptyString,
+  verificationUri: TrimmedNonEmptyString,
+  expiresAt: Schema.Number,
+});
+export type SourceControlSignInPrompt = typeof SourceControlSignInPrompt.Type;
+
+export const SourceControlSignInResult = Schema.Struct({
+  account: TrimmedNonEmptyString,
+});
+export type SourceControlSignInResult = typeof SourceControlSignInResult.Type;
+
+export const SourceControlSignInFailure = Schema.Literals([
+  "unsupported",
+  "not-started",
+  "denied",
+  "expired",
+  "failed",
+]);
+export type SourceControlSignInFailure = typeof SourceControlSignInFailure.Type;
+
+export const SourceControlAppAccessInput = Schema.Struct({
+  provider: SourceControlProviderKind,
+  host: TrimmedNonEmptyString,
+  repository: TrimmedNonEmptyString,
+});
+export type SourceControlAppAccessInput = typeof SourceControlAppAccessInput.Type;
+
+/** Whether the server's forge app sign-in reaches a repository; `signed-out` when not in use. */
+export const SourceControlAppAccess = Schema.Struct({
+  status: Schema.Literals(["covered", "not-covered", "signed-out"]),
+});
+export type SourceControlAppAccess = typeof SourceControlAppAccess.Type;
+
+export class SourceControlSignInError extends Schema.TaggedError<SourceControlSignInError>()(
+  "SourceControlSignInError",
+  {
+    provider: SourceControlProviderKind,
+    host: Schema.String,
+    reason: SourceControlSignInFailure,
+    detail: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
 export class SourceControlRepositoryError extends Schema.TaggedError<SourceControlRepositoryError>()(
   "SourceControlRepositoryError",
   {

@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 
 import { definition } from "../shared/definition.ts";
 
+import * as GitHubAppSignIn from "./GitHubAppSignIn.ts";
 import * as GitHubMediaFetch from "./gitHubMediaFetch.ts";
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
 import * as GitHubPullRequestProvider from "./GitHubPullRequestProvider.ts";
@@ -24,6 +25,7 @@ const makeInstance = Effect.all({
   discovery: GitHubSourceControlProvider.makeDiscovery,
   pullRequests: GitHubPullRequestProvider.make,
   fetchMedia: GitHubMediaFetch.make,
+  signIn: Effect.service(GitHubAppSignIn.GitHubAppSignIn),
 });
 
 export const driver = defineSourceControlDriver({

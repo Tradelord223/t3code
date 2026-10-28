@@ -419,7 +419,7 @@ export class GitHubPullRequestApi extends Context.Service<
   GitHubPullRequestApi,
   {
     readonly withVerifiedCredential: <A, E, R>(
-      input: { readonly cwd: string; readonly host: string },
+      input: { readonly cwd: string; readonly host: string; readonly repository?: string },
       use: (identity: {
         readonly accountId: string;
         readonly viewer: string;

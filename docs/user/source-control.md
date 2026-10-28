@@ -23,13 +23,31 @@ order of precedence:
 
 1. A token saved in **Settings → Source control → GitHub**. It is kept in the server's secret
    store, and works without the GitHub CLI.
-2. `GH_TOKEN` (`GH_ENTERPRISE_TOKEN` with `GH_HOST` for GitHub Enterprise Server) in the
+2. **Sign in with GitHub** in the same place, through the T3 Code for GitHub app.
+3. `GH_TOKEN` (`GH_ENTERPRISE_TOKEN` with `GH_HOST` for GitHub Enterprise Server) in the
    server's environment.
-3. [GitHub CLI](https://cli.github.com/) 2.81.0 or newer, signed in with `gh auth login`.
+4. [GitHub CLI](https://cli.github.com/) 2.81.0 or newer, signed in with `gh auth login`.
 
 If `gh` is signed in to several accounts or hosts, expand **GitHub** in the same place to pick
-the account each host uses or turn a host off. A saved token or `GH_TOKEN` takes precedence
-over that choice; a host turned off stays off either way.
+the account each host uses or turn a host off. A saved token, a sign-in, or `GH_TOKEN` takes
+precedence over that choice; a host turned off stays off either way.
+
+#### Sign in with GitHub
+
+Signing in gives T3 Code a much higher GitHub API rate limit than a personal token or the
+`gh` login, so pull request status and reviews keep updating on busy days. It works on
+github.com only, and is optional.
+
+Choose **Sign in with GitHub**, enter the code it shows at github.com/login/device from any
+browser, and approve **T3 Code for GitHub**. On mobile, the code is copied for you, and the
+server finishes signing in even if you leave the app. T3 Code acts as you, so it can only do
+what your account can.
+
+The app reaches repositories in accounts and organizations that installed it. For any other
+repository, T3 Code uses your token, `GH_TOKEN`, or `gh` login instead, at your own rate limit.
+A pull request or a newly cloned project from such a repository offers a link to install the app
+there; an organization owner may need to approve it. Sign out from the same place, or revoke the
+app in GitHub's **Settings → Applications**.
 
 For GitHub Enterprise, sign in with `gh auth login --hostname YOUR_HOST`. T3 Code treats a
 custom server name as GitHub once it has a credential for that host.

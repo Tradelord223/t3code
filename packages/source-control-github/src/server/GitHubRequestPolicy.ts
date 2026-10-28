@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import { repositoryPathFromRemoteUrl } from "@t3tools/source-control-core/server/SourceControlProvider";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
 import * as GitHubCredentials from "./GitHubCredentials.ts";
@@ -26,6 +27,49 @@ export const PinnedGitHubCredential = Context.Reference<{
 } | null>("@t3tools/source-control-github/server/GitHubRequestPolicy/PinnedGitHubCredential", {
   defaultValue: () => null,
 });
+
+/**
+ * The `owner/name` requests in scope are about, so the credential chosen for them can reach it:
+ * the app sign-in only reaches repositories where the app is installed.
+ */
+export const GitHubRepositoryScope = Context.Reference<string | null>(
+  "@t3tools/source-control-github/server/GitHubRequestPolicy/GitHubRepositoryScope",
+  { defaultValue: () => null },
+);
+
+function repositoryOf(input: unknown): string | null {
+  if (typeof input !== "object" || input === null) return null;
+  if ("repository" in input && typeof input.repository === "string") return input.repository;
+  // A checkout names its repository through the remote it pushes to.
+  return "context" in input &&
+    typeof input.context === "object" &&
+    input.context !== null &&
+    "remoteUrl" in input.context &&
+    typeof input.context.remoteUrl === "string"
+    ? repositoryPathFromRemoteUrl(input.context.remoteUrl)
+    : null;
+}
+
+/**
+ * Every method whose first argument names a `repository`, or a checkout `context`, runs in that
+ * repository's scope.
+ */
+export function scopeMethodsToRepository<T extends object>(methods: T): T {
+  const scoped: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(methods)) {
+    scoped[key] =
+      typeof value !== "function"
+        ? value
+        : (...args: Array<unknown>) => {
+            const result: unknown = Reflect.apply(value, methods, args);
+            const repository = repositoryOf(args[0]);
+            if (repository === null || !Effect.isEffect(result)) return result;
+            // @effect-diagnostics-next-line anyUnknownInErrorContext:off - forwards each method's own effect, whose channels `T` keeps.
+            return Effect.provideService(result, GitHubRepositoryScope, repository);
+          };
+  }
+  return scoped as T;
+}
 
 export class GitHubApiRequestError extends Schema.TaggedError<GitHubApiRequestError>()(
   "GitHubApiRequestError",
@@ -221,7 +265,7 @@ export const make = Effect.gen(function* () {
       }
       return { token: pinned.token, fingerprint: pinned.credentialFingerprint };
     }
-    const held = yield* credentials.get(normalized);
+    const held = yield* credentials.get(normalized, yield* GitHubRepositoryScope);
     return { token: held.token, fingerprint: held.fingerprint };
   });
 

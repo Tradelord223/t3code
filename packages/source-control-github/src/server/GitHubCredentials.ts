@@ -18,6 +18,7 @@ import { readSourceControlHostSettings } from "@t3tools/source-control-core/shar
 import type { ServerSettings } from "@t3tools/contracts";
 
 import * as GitHubClient from "../shared/definition.ts";
+import * as GitHubAppSignIn from "./GitHubAppSignIn.ts";
 
 /**
  * Every gh run on the server shares this. A burst of them (a status poll across many checkouts)
@@ -28,7 +29,7 @@ export const GH_PROCESS_CONCURRENCY = { key: "gh", limit: 4 } as const;
 const TOKEN_TTL = Duration.minutes(5);
 const MISSING_TTL = Duration.seconds(10);
 
-export const GitHubCredentialSource = Schema.Literals(["settings", "env", "gh"]);
+export const GitHubCredentialSource = Schema.Literals(["settings", "app", "env", "gh"]);
 export type GitHubCredentialSource = typeof GitHubCredentialSource.Type;
 
 export interface GitHubCredential {
@@ -43,7 +44,7 @@ export class GitHubCliMissingError extends Schema.TaggedError<GitHubCliMissingEr
   { host: Schema.String },
 ) {
   override get message(): string {
-    return `No GitHub credential for ${this.host}: set GH_TOKEN, or install the GitHub CLI and run \`gh auth login\`.`;
+    return `No GitHub credential for ${this.host}: sign in with GitHub in Settings → Source Control, set GH_TOKEN, or install the GitHub CLI and run \`gh auth login\`.`;
   }
 }
 
@@ -80,13 +81,16 @@ export type GitHubCredentialUnavailableError =
   | GitHubCliMissingError
   | GitHubNotSignedInError
   | GitHubHostDisabledError
-  | GitHubCliFailedError;
+  | GitHubCliFailedError
+  | GitHubAppSignIn.GitHubAppSessionError;
 
 export class GitHubCredentials extends Context.Service<
   GitHubCredentials,
   {
+    /** `repository` (`owner/name`) keeps the app sign-in off repositories it cannot reach. */
     readonly get: (
       host: string,
+      repository?: string | null,
     ) => Effect.Effect<GitHubCredential, GitHubCredentialUnavailableError>;
     readonly invalidate: (host: string) => Effect.Effect<void>;
   }
@@ -131,6 +135,7 @@ export const make = Effect.gen(function* () {
   const sourceControlHost = yield* SourceControlHost.SourceControlHost;
   const process = sourceControlHost.process;
   const crypto = yield* Crypto.Crypto;
+  const appSignIn = yield* GitHubAppSignIn.GitHubAppSignIn;
   const environment = yield* HostProcess.Environment;
   const workingDirectory = yield* HostProcess.WorkingDirectory;
 
@@ -229,7 +234,7 @@ export const make = Effect.gen(function* () {
   });
 
   return GitHubCredentials.of({
-    get: Effect.fn("GitHubCredentials.get")(function* (rawHost) {
+    get: Effect.fn("GitHubCredentials.get")(function* (rawHost, repository) {
       const host = normalizeHost(rawHost);
       if (!isGitHubHost(host)) return yield* new GitHubNotSignedInError({ host });
       const choice = yield* hostChoice(host);
@@ -245,15 +250,32 @@ export const make = Effect.gen(function* () {
           fingerprint: yield* fingerprintOf(host, saved),
         } satisfies GitHubCredential;
       }
-      return yield* Cache.get(cache, cacheKey(host, choice?.account));
+      const signedIn = yield* appSignIn.token(host);
+      if (Option.isNone(signedIn)) return yield* Cache.get(cache, cacheKey(host, choice?.account));
+      const app = {
+        host,
+        token: Redacted.make(signedIn.value),
+        source: "app",
+        fingerprint: yield* fingerprintOf(host, signedIn.value),
+      } satisfies GitHubCredential;
+      if (repository == null || (yield* appSignIn.access(host, repository)) !== "not-covered") {
+        return app;
+      }
+      // The user's own credential reaches what they can; the app token still reads public repositories.
+      return yield* Cache.get(cache, cacheKey(host, choice?.account)).pipe(
+        Effect.orElseSucceed(() => app),
+      );
     }),
     invalidate: Effect.fn("GitHubCredentials.invalidate")(function (rawHost) {
       const host = normalizeHost(rawHost);
-      return hostChoice(host).pipe(
+      return appSignIn.invalidate(host).pipe(
+        Effect.andThen(hostChoice(host)),
         Effect.flatMap((choice) => Cache.invalidate(cache, cacheKey(host, choice?.account))),
       );
     }),
   });
 });
 
-export const layer = Layer.effect(GitHubCredentials, make);
+export const layer = Layer.effect(GitHubCredentials, make).pipe(
+  Layer.provideMerge(GitHubAppSignIn.layer),
+);

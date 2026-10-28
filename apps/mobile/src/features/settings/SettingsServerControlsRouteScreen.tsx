@@ -28,6 +28,7 @@ import { DatabaseStorageNotice } from "./components/DatabaseStorageNotice";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
+import { SourceControlSignInSection } from "./components/SourceControlSignInSection";
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { useSettingsWriter } from "./useSettingsWriter";
@@ -395,6 +396,12 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
 
               {props.page === "source-control" ? (
                 <>
+                  {projectSelected ? null : (
+                    <SourceControlSignInSection
+                      environments={selectedTargets}
+                      canWrite={(environmentId) => writableEnvironments.has(environmentId)}
+                    />
+                  )}
                   <SettingsSection title="Pull requests">
                     <SettingsSwitchRow
                       icon={PullRequestGlyph.merged}
