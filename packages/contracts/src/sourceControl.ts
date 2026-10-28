@@ -205,6 +205,7 @@ export type SourceControlSignInResult = typeof SourceControlSignInResult.Type;
 export const SourceControlSignInFailure = Schema.Literals([
   "unsupported",
   "not-started",
+  "cancelled",
   "denied",
   "expired",
   "failed",

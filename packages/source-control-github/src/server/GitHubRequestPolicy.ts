@@ -311,7 +311,7 @@ export const make = Effect.gen(function* () {
         }
         case "Unauthorized":
           // The source may hold a newer token than the one that was refused.
-          yield* credentials.invalidate(host);
+          yield* credentials.invalidate(host, token);
           return yield* new GitHubApiAuthenticationError(context);
         case "NotFound":
           return yield* new GitHubApiNotFoundError(context);

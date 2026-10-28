@@ -85,7 +85,7 @@ const InstallationRepositories = Schema.Struct({
 
 // Installing the app on another account should show up soon after the user comes back.
 const COVERAGE_TTL = Duration.minutes(2);
-const MAX_REPOSITORY_PAGES = 10;
+const MAX_PAGES = 10;
 
 /** Where the signed-in app reaches: accounts that installed it for all repositories, or listed ones. */
 interface AppCoverage {
@@ -110,8 +110,8 @@ export class GitHubAppSignIn extends Context.Service<
   {
     /** The signed-in access token for `host`, refreshed when due; none when not signed in. */
     readonly token: (host: string) => Effect.Effect<Option.Option<string>, GitHubAppSessionError>;
-    /** Refreshes on the next `token`, after GitHub refused the current one. */
-    readonly invalidate: (host: string) => Effect.Effect<void>;
+    /** Refreshes on the next `token` when `rejected` is the token GitHub just refused. */
+    readonly invalidate: (host: string, rejected: string) => Effect.Effect<void>;
     /**
      * Whether an installation covers `owner/name`. A check that fails answers `covered`, so a
      * GitHub hiccup neither moves requests off the app nor nags the user.
@@ -123,6 +123,7 @@ export class GitHubAppSignIn extends Context.Service<
     readonly wait: (
       host: string,
     ) => Effect.Effect<SourceControlSignInResult, SourceControlSignInError>;
+    readonly cancel: (host: string) => Effect.Effect<void>;
   }
 >()("@t3tools/source-control-github/server/GitHubAppSignIn") {}
 
@@ -170,6 +171,21 @@ export const make = Effect.gen(function* () {
     yield* sourceControlHost.settings.update({
       sourceControlHosts: { [GitHubClient.definition.kind]: { signIns } },
     });
+  });
+
+  /**
+   * Writes `next` only while the stored session is still the one a refresh started from, so a
+   * sign-out or a newer sign-in during the request is not undone.
+   */
+  const replaceSession = Effect.fn("GitHubAppSignIn.replaceSession")(function* (
+    host: string,
+    from: GitHubAppSession,
+    next: GitHubAppSession | null,
+  ) {
+    const current = yield* readSession(host);
+    if (Option.isNone(current) || current.value.accessToken !== from.accessToken) return false;
+    yield* writeSession(host, next);
+    return true;
   });
 
   const postForm = <S extends Schema.Top>(
@@ -237,7 +253,7 @@ export const make = Effect.gen(function* () {
       session.refreshToken === null ||
       (session.refreshTokenExpiresAt !== null && session.refreshTokenExpiresAt <= now)
     ) {
-      yield* writeSession(host, null).pipe(Effect.ignore);
+      yield* replaceSession(host, session, null).pipe(Effect.ignore);
       return Option.none<string>();
     }
     const response = yield* postForm(
@@ -256,17 +272,19 @@ export const make = Effect.gen(function* () {
         host,
         error: response.error,
       });
-      yield* writeSession(host, null).pipe(Effect.ignore);
+      yield* replaceSession(host, session, null).pipe(Effect.ignore);
       return Option.none<string>();
     }
     const next = sessionFrom(session.account, now, {
       ...response,
       access_token: response.access_token,
     });
-    yield* writeSession(host, next).pipe(
+    const saved = yield* replaceSession(host, session, next).pipe(
       Effect.mapError((cause) => new GitHubAppSessionError({ host, cause })),
     );
-    return Option.some(next.accessToken);
+    if (saved) return Option.some(next.accessToken);
+    // Signed out or signed in again meanwhile: serve whatever is stored now.
+    return Option.map(yield* readSession(host), (current) => current.accessToken);
   });
 
   const isFresh = (session: GitHubAppSession, now: number) =>
@@ -305,11 +323,11 @@ export const make = Effect.gen(function* () {
 
   const invalidate: GitHubAppSignIn["Service"]["invalidate"] = Effect.fn(
     "GitHubAppSignIn.invalidate",
-  )(function* (rawHost) {
+  )(function* (rawHost, rejected) {
     const session = yield* readSession(rawHost.trim().toLowerCase());
-    if (Option.isNone(session)) return;
-    const refusedToken = session.value.accessToken;
-    yield* Ref.update(refused, (current) => new Set([...current, refusedToken]));
+    // A refused fallback token says nothing about the app session.
+    if (Option.isNone(session) || session.value.accessToken !== rejected) return;
+    yield* Ref.update(refused, (current) => new Set([...current, rejected]));
   });
 
   const poll = Effect.fn("GitHubAppSignIn.poll")(function* (
@@ -475,12 +493,17 @@ export const make = Effect.gen(function* () {
   const coverageOf = Effect.fn("GitHubAppSignIn.coverageOf")(function* (host: string) {
     const accessToken = yield* token(host);
     if (Option.isNone(accessToken)) return null;
-    const { installations } = yield* getJson(
-      host,
-      accessToken.value,
-      "user/installations?per_page=100",
-      Installations,
-    );
+    const installations: Array<(typeof Installations.Type.installations)[number]> = [];
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const listed = yield* getJson(
+        host,
+        accessToken.value,
+        `user/installations?per_page=100&page=${page}`,
+        Installations,
+      );
+      installations.push(...listed.installations);
+      if (listed.installations.length < 100) break;
+    }
     const accounts = new Set<string>();
     const repositories = new Set<string>();
     for (const installation of installations) {
@@ -490,7 +513,12 @@ export const make = Effect.gen(function* () {
         accounts.add(login);
         continue;
       }
-      for (let page = 1; page <= MAX_REPOSITORY_PAGES; page++) {
+      for (let page = 1; ; page++) {
+        // Past the cap the list is cut short; count the whole account as reached rather than nag.
+        if (page > MAX_PAGES) {
+          accounts.add(login);
+          break;
+        }
         const listed = yield* getJson(
           host,
           accessToken.value,
@@ -514,7 +542,15 @@ export const make = Effect.gen(function* () {
   const access: GitHubAppSignIn["Service"]["access"] = Effect.fn("GitHubAppSignIn.access")(
     function* (rawHost, rawRepository) {
       const host = rawHost.trim().toLowerCase();
-      const repository = rawRepository.trim().toLowerCase();
+      // Callers may name a repository as a URL, `host/owner/name` or `owner/name.git`.
+      const repository = rawRepository
+        .trim()
+        .toLowerCase()
+        .replace(/\.git\/?$/, "")
+        .split(/[/:]/)
+        .filter((segment) => segment.length > 0)
+        .slice(-2)
+        .join("/");
       if (!isAppHost(host) || Option.isNone(yield* readSession(host))) return "signed-out";
       const known = yield* Cache.get(coverage, host).pipe(Effect.option);
       if (Option.isNone(known)) return "covered";
@@ -526,7 +562,20 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  return GitHubAppSignIn.of({ token, invalidate, access, start, wait });
+  const cancel: GitHubAppSignIn["Service"]["cancel"] = Effect.fn("GitHubAppSignIn.cancel")(
+    function* (rawHost) {
+      const host = rawHost.trim().toLowerCase();
+      const current = (yield* Ref.get(pending)).get(host);
+      if (current === undefined) return;
+      yield* Deferred.fail(
+        current.deferred,
+        signInError(host, "cancelled", "The sign-in was cancelled."),
+      );
+      yield* Fiber.interrupt(current.fiber);
+    },
+  );
+
+  return GitHubAppSignIn.of({ token, invalidate, access, start, wait, cancel });
 });
 
 export const layer = Layer.effect(GitHubAppSignIn, make);

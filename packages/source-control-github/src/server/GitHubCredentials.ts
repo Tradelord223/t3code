@@ -92,7 +92,11 @@ export class GitHubCredentials extends Context.Service<
       host: string,
       repository?: string | null,
     ) => Effect.Effect<GitHubCredential, GitHubCredentialUnavailableError>;
-    readonly invalidate: (host: string) => Effect.Effect<void>;
+    /** `rejected` is the token GitHub refused, so only the source holding it is refreshed. */
+    readonly invalidate: (
+      host: string,
+      rejected?: Redacted.Redacted<string>,
+    ) => Effect.Effect<void>;
   }
 >()("@t3tools/source-control-github/server/GitHubCredentials") {}
 
@@ -266,9 +270,11 @@ export const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => app),
       );
     }),
-    invalidate: Effect.fn("GitHubCredentials.invalidate")(function (rawHost) {
+    invalidate: Effect.fn("GitHubCredentials.invalidate")(function (rawHost, rejected) {
       const host = normalizeHost(rawHost);
-      return appSignIn.invalidate(host).pipe(
+      return (
+        rejected === undefined ? Effect.void : appSignIn.invalidate(host, Redacted.value(rejected))
+      ).pipe(
         Effect.andThen(hostChoice(host)),
         Effect.flatMap((choice) => Cache.invalidate(cache, cacheKey(host, choice?.account))),
       );

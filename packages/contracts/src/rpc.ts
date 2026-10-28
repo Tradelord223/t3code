@@ -596,6 +596,7 @@ export const WS_METHODS = {
   sourceControlPublishRepository: "sourceControl.publishRepository",
   sourceControlSignInStart: "sourceControl.signInStart",
   sourceControlSignInWait: "sourceControl.signInWait",
+  sourceControlSignInCancel: "sourceControl.signInCancel",
   sourceControlAppAccess: "sourceControl.appAccess",
   projectCloneStart: "projectClone.start",
   projectCloneCancel: "projectClone.cancel",
@@ -1248,6 +1249,13 @@ const WsSourceControlSignInStartRpc = Rpc.make(WS_METHODS.sourceControlSignInSta
 const WsSourceControlSignInWaitRpc = Rpc.make(WS_METHODS.sourceControlSignInWait, {
   payload: SourceControlSignInInput,
   success: SourceControlSignInResult,
+  error: Schema.Union([SourceControlSignInError, EnvironmentAuthorizationError]),
+});
+
+// Ends the sign-in `signInStart` began, so approving the code afterwards signs nothing in.
+const WsSourceControlSignInCancelRpc = Rpc.make(WS_METHODS.sourceControlSignInCancel, {
+  payload: SourceControlSignInInput,
+  success: Schema.Void,
   error: Schema.Union([SourceControlSignInError, EnvironmentAuthorizationError]),
 });
 
@@ -2110,6 +2118,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSourceControlPublishRepositoryRpc,
   WsSourceControlSignInStartRpc,
   WsSourceControlSignInWaitRpc,
+  WsSourceControlSignInCancelRpc,
   WsSourceControlAppAccessRpc,
   WsProjectCloneStartRpc,
   WsProjectCloneCancelRpc,

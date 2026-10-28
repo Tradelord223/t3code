@@ -2724,6 +2724,7 @@ export const layerWsRpc = (
           sourceControlRepositories.cloneRepository(input),
         [WS_METHODS.sourceControlSignInStart]: (input) => sourceControlSignIn.start(input),
         [WS_METHODS.sourceControlSignInWait]: (input) => sourceControlSignIn.wait(input),
+        [WS_METHODS.sourceControlSignInCancel]: (input) => sourceControlSignIn.cancel(input),
         [WS_METHODS.sourceControlAppAccess]: (input) => sourceControlSignIn.access(input),
         [WS_METHODS.projectCloneStart]: (input) =>
           projectCloneTracker.start(input, {

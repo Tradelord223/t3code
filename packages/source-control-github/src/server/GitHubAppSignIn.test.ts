@@ -1,5 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -41,24 +42,28 @@ function harness(options: {
   readonly tokens?: Record<string, string>;
   /** Without one, the server has no `gh` login to fall back to. */
   readonly ghSignedIn?: boolean;
+  /** Holds a request open until it completes, to interleave other work with it. */
+  readonly gate?: (path: string) => Effect.Effect<void>;
 }) {
   const requests: Array<{ readonly path: string; readonly form: URLSearchParams }> = [];
   const http = HttpClient.make((request) =>
-    Effect.sync(() => {
-      const url = new URL(request.url);
-      const form = new URLSearchParams(
-        request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "",
-      );
-      requests.push({ path: url.pathname, form });
-      const reply = options.handle(url.pathname, form, request.headers["authorization"]);
-      return HttpClientResponse.fromWeb(
-        request,
-        new Response(JSON.stringify(reply.body), {
-          status: reply.status ?? 200,
-          headers: { "content-type": "application/json" },
-        }),
-      );
-    }),
+    Effect.suspend(() => options.gate?.(new URL(request.url).pathname) ?? Effect.void).pipe(
+      Effect.map(() => {
+        const url = new URL(request.url);
+        const form = new URLSearchParams(
+          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "",
+        );
+        requests.push({ path: url.pathname, form });
+        const reply = options.handle(url.pathname, form, request.headers["authorization"]);
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response(JSON.stringify(reply.body), {
+            status: reply.status ?? 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    ),
   );
   const run: SourceControlHost.SourceControlHost["Service"]["process"]["run"] = () =>
     Effect.succeed({
@@ -237,7 +242,7 @@ describe("GitHubAppSignIn", () => {
     return Effect.gen(function* () {
       const credentials = yield* GitHubCredentials.GitHubCredentials;
       expect(Redacted.value((yield* credentials.get("github.com")).token)).toBe("ghu_current");
-      yield* credentials.invalidate("github.com");
+      yield* credentials.invalidate("github.com", Redacted.make("ghu_current"));
       expect(Redacted.value((yield* credentials.get("github.com")).token)).toBe("ghu_refreshed");
       expect(requests).toHaveLength(1);
     }).pipe(Effect.provide(layer));
@@ -362,6 +367,68 @@ describe("GitHubAppSignIn", () => {
       expect(yield* (yield* GitHubAppSignIn.GitHubAppSignIn).access("github.com", "acme/two")).toBe(
         "covered",
       );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keeps the app session when GitHub refuses a different credential", () => {
+    const { layer, requests } = harness({
+      signIns: { "github.com": session() },
+      handle: () => ({ body: { access_token: "ghu_refreshed" } }),
+    });
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      yield* credentials.invalidate("github.com", Redacted.make("gh-token"));
+      expect(Redacted.value((yield* credentials.get("github.com")).token)).toBe("ghu_current");
+      expect(requests).toEqual([]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("does not bring a session back that was signed out while it refreshed", () => {
+    const released = Deferred.makeUnsafe<void>();
+    const requested = Deferred.makeUnsafe<void>();
+    const { layer } = harness({
+      signIns: { "github.com": session({ accessTokenExpiresAt: 0 }) },
+      gate: () =>
+        Deferred.succeed(requested, undefined).pipe(Effect.andThen(Deferred.await(released))),
+      handle: () => ({ body: { access_token: "ghu_refreshed", expires_in: 28_800 } }),
+    });
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      const settings = yield* TestSourceControlHost.TestSourceControlHostSettings;
+      const refreshing = yield* Effect.forkChild(credentials.get("github.com"));
+      yield* Deferred.await(requested);
+      yield* settings.update({ sourceControlHosts: { github: { signIns: {} } } });
+      yield* Deferred.succeed(released, undefined);
+      expect((yield* Fiber.join(refreshing)).source).toBe("gh");
+      expect(yield* savedSignIns).toEqual({});
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("cancels a sign-in so approving the code afterwards saves nothing", () => {
+    const { layer, requests } = harness({
+      handle: (path) =>
+        path === "/login/device/code"
+          ? { body: deviceCode }
+          : { body: { access_token: "ghu_new", expires_in: 28_800 } },
+    });
+    return Effect.gen(function* () {
+      const signIn = yield* GitHubAppSignIn.GitHubAppSignIn;
+      yield* signIn.start("github.com");
+      const waiting = yield* Effect.forkChild(Effect.flip(signIn.wait("github.com")));
+      yield* signIn.cancel("github.com");
+      yield* TestClock.adjust("10 seconds");
+      expect((yield* Fiber.join(waiting)).reason).toBe("cancelled");
+      expect(requests.map((request) => request.path)).toEqual(["/login/device/code"]);
+      expect(yield* savedSignIns).toEqual({});
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("matches a repository named as a URL or with its host", () => {
+    const { layer } = harness({ signIns: { "github.com": session() }, handle: installedOn });
+    return Effect.gen(function* () {
+      const signIn = yield* GitHubAppSignIn.GitHubAppSignIn;
+      expect(yield* signIn.access("github.com", "https://github.com/acme/one.git")).toBe("covered");
+      expect(yield* signIn.access("github.com", "github.com/Acme/One")).toBe("covered");
     }).pipe(Effect.provide(layer));
   });
 });

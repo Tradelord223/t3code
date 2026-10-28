@@ -106,6 +106,7 @@ export function SourceControlAppSignInSettings({
   );
   const start = useAtomCommand(sourceControlEnvironment.startSignIn, { reportFailure: false });
   const wait = useAtomCommand(sourceControlEnvironment.waitForSignIn, { reportFailure: false });
+  const cancel = useAtomCommand(sourceControlEnvironment.cancelSignIn, { reportFailure: false });
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: `sign out of ${appSignIn.appName}`,
   });
@@ -179,7 +180,14 @@ export function SourceControlAppSignInSettings({
   } else if (waiting !== null) {
     subtitle = "Approve the app on GitHub to finish signing in.";
     action = (
-      <Button size="xs" variant="ghost" onClick={() => setState({ status: "idle" })}>
+      <Button
+        size="xs"
+        variant="ghost"
+        onClick={() => {
+          setState({ status: "idle" });
+          void cancel({ environmentId, input: { provider: definition.kind, host } });
+        }}
+      >
         Cancel
       </Button>
     );

@@ -7,7 +7,7 @@ import {
 } from "@t3tools/client-runtime/source-control-clients";
 import * as Cause from "effect/Cause";
 import * as Clipboard from "expo-clipboard";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Alert, Linking } from "react-native";
 
 import { serverEnvironment } from "../../../state/server";
@@ -73,6 +73,10 @@ function AppSignInRow(props: {
   const signedIn = (signIns[host] ?? "").length > 0;
   const start = useAtomCommand(sourceControlEnvironment.startSignIn, { reportFailure: false });
   const wait = useAtomCommand(sourceControlEnvironment.waitForSignIn, { reportFailure: false });
+  const cancel = useAtomCommand(sourceControlEnvironment.cancelSignIn, { reportFailure: false });
+  // The attempt a pending `wait` belongs to; a cancel or a newer attempt makes its outcome stale.
+  const attempt = useRef<SourceControlSignInPrompt | null>(null);
+  const input = { provider: definition.kind, host };
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: `sign out of ${appSignIn.appName}`,
   });
@@ -84,7 +88,15 @@ function AppSignInRow(props: {
       prompt.userCode,
       `Enter this code on GitHub, then approve ${appSignIn.appName}. It is copied. The server finishes signing in even if you leave the app.`,
       [
-        { text: "Cancel", style: "cancel", onPress: () => setPending(null) },
+        {
+          text: "Cancel",
+          style: "cancel",
+          onPress: () => {
+            attempt.current = null;
+            setPending(null);
+            void cancel({ environmentId, input });
+          },
+        },
         { text: "Open GitHub", onPress: () => openUrl(prompt.verificationUri) },
       ],
     );
@@ -92,7 +104,6 @@ function AppSignInRow(props: {
 
   const signIn = async () => {
     setPending("starting");
-    const input = { provider: definition.kind, host };
     const started = await start({ environmentId, input });
     if (started._tag !== "Success") {
       setPending(null);
@@ -100,10 +111,13 @@ function AppSignInRow(props: {
       return;
     }
     const prompt = started.value;
+    attempt.current = prompt;
     setPending(prompt);
     showCode(prompt);
     const finished = await wait({ environmentId, input });
-    setPending((current) => (current === prompt ? null : current));
+    if (attempt.current !== prompt) return;
+    attempt.current = null;
+    setPending(null);
     if (finished._tag !== "Success") {
       Alert.alert("Sign-in did not finish", failureMessage(finished.cause));
     }

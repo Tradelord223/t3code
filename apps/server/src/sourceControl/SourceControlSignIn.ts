@@ -22,6 +22,9 @@ export class SourceControlSignIn extends Context.Service<
     readonly wait: (
       input: SourceControlSignInInput,
     ) => Effect.Effect<SourceControlSignInResult, SourceControlSignInError>;
+    readonly cancel: (
+      input: SourceControlSignInInput,
+    ) => Effect.Effect<void, SourceControlSignInError>;
     readonly access: (input: SourceControlAppAccessInput) => Effect.Effect<SourceControlAppAccess>;
   }
 >()("t3/sourceControl/SourceControlSignIn") {}
@@ -49,6 +52,9 @@ const make = Effect.gen(function* () {
     }),
     wait: Effect.fn("SourceControlSignIn.wait")(function* (input) {
       return yield* (yield* signInFor(input)).wait(input.host);
+    }),
+    cancel: Effect.fn("SourceControlSignIn.cancel")(function* (input) {
+      return yield* (yield* signInFor(input)).cancel(input.host);
     }),
     access: Effect.fn("SourceControlSignIn.access")(function* (input) {
       const signIn = drivers.find(({ driver }) => driver.kind === input.provider)?.instance.signIn;
