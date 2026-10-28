@@ -12,22 +12,28 @@ import * as Stream from "effect/Stream";
 import * as CodexClient from "./client.ts";
 import * as CodexError from "./errors.ts";
 
+/** Which concurrent app-server process an entry belongs to; untagged entries belong to 0. */
+const ReplayConnection = Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)));
+
 export const CodexAppServerReplayEntry = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("expect_outbound"),
     label: Schema.optional(Schema.String),
     frame: Schema.Unknown,
+    connection: ReplayConnection,
   }),
   Schema.Struct({
     type: Schema.Literal("emit_inbound"),
     label: Schema.optional(Schema.String),
     frame: Schema.Unknown,
     afterMs: Schema.optional(Schema.Number),
+    connection: ReplayConnection,
   }),
   Schema.Struct({
     type: Schema.Literal("runtime_exit"),
     status: Schema.Literals(["success", "error", "cancelled"]),
     error: Schema.optional(Schema.Unknown),
+    connection: ReplayConnection,
   }),
 ]);
 export type CodexAppServerReplayEntry = typeof CodexAppServerReplayEntry.Type;
@@ -41,6 +47,17 @@ export const CodexAppServerReplayTranscript = Schema.Struct({
   entries: Schema.Array(CodexAppServerReplayEntry),
 });
 export type CodexAppServerReplayTranscript = typeof CodexAppServerReplayTranscript.Type;
+
+/** Splits a recording of concurrent app-server processes into one transcript per process. */
+export function splitReplayConnections(
+  transcript: CodexAppServerReplayTranscript,
+): ReadonlyArray<CodexAppServerReplayTranscript> {
+  const count = 1 + Math.max(0, ...transcript.entries.map((entry) => entry.connection ?? 0));
+  return Array.from({ length: count }, (_, connection) => ({
+    ...transcript,
+    entries: transcript.entries.filter((entry) => (entry.connection ?? 0) === connection),
+  }));
+}
 const decodeOutboundJsonFrame = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 export class CodexAppServerReplayJsonParseError extends Schema.TaggedError<CodexAppServerReplayJsonParseError>()(

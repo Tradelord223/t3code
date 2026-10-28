@@ -1158,7 +1158,14 @@ const makeRecorder = Effect.fn("record-codex-app-server-replay-fixture.makeRecor
   return { path: outPath, setVersion, writeRecord, flush };
 });
 
-function layerCodex({ recorder }: { readonly recorder: Recorder }) {
+/** `connection` tags records from a second, concurrent app-server; replay gives it to the next session. */
+function layerCodex({
+  recorder,
+  connection = 0,
+}: {
+  readonly recorder: Recorder;
+  readonly connection?: number;
+}) {
   const clientRequestMethodById = new Map<string, string>();
   const serverRequestMethodById = new Map<string, string>();
   const clientOptions: CodexClient.CodexAppServerClientOptions = {
@@ -1204,11 +1211,13 @@ function layerCodex({ recorder }: { readonly recorder: Recorder }) {
               type: "expect_outbound",
               ...(label ? { label } : {}),
               frame: event.payload,
+              ...(connection === 0 ? {} : { connection }),
             }
           : {
               type: "emit_inbound",
               ...(label ? { label } : {}),
               frame: event.payload,
+              ...(connection === 0 ? {} : { connection }),
             };
 
       return Effect.gen(function* () {
@@ -1548,17 +1557,31 @@ const runReplaySession = Effect.fn("record-codex-app-server-replay-fixture.runRe
       return;
     }
 
+    // T3 runs one app-server per thread, so each fork records its own connection.
+    let connectionCount = 0;
+    const openConnection = Effect.gen(function* () {
+      const context = yield* Layer.build(layerCodex({ recorder, connection: connectionCount++ }));
+      return yield* initializeClient.pipe(Effect.provide(context));
+    });
+
     yield* Effect.gen(function* () {
-      const client = yield* initializeClient;
-      const thread = yield* client.request("thread/start", {
+      const sourceClient = yield* openConnection;
+      const thread = yield* sourceClient.request("thread/start", {
         ...threadRuntimeParams,
         config: { ...threadRuntimeParams.config, ...run.threadConfig },
       });
       let activeThreadId = thread.thread.id;
       const threadIds = new Map<string, string>([["source", thread.thread.id]]);
+      const clientByThread = new Map([[thread.thread.id, sourceClient]]);
+      const clientFor = (threadId: string) => {
+        const client = clientByThread.get(threadId);
+        if (client === undefined) throw new Error(`No app-server for replay thread ${threadId}.`);
+        return client;
+      };
 
       for (const [stepIndex, step] of run.steps.entries()) {
         if (step.type === "rollback") {
+          const client = clientFor(activeThreadId);
           yield* client.request("thread/read", { threadId: activeThreadId, includeTurns: false });
           yield* revertCodexThread(client, activeThreadId, step.numTurns);
           continue;
@@ -1570,11 +1593,13 @@ const runReplaySession = Effect.fn("record-codex-app-server-replay-fixture.runRe
             throw new Error(`Unknown replay thread alias '${step.from}'.`);
           }
           const lastTurnId = lastTurnIdByThread.get(sourceThreadId);
-          const forked = yield* client.request("thread/fork", {
+          const forkClient = yield* openConnection;
+          const forked = yield* forkClient.request("thread/fork", {
             threadId: sourceThreadId,
             ...(lastTurnId === undefined ? {} : { lastTurnId }),
             ...threadRuntimeParams,
           });
+          clientByThread.set(forked.thread.id, forkClient);
           activeThreadId = forked.thread.id;
           if (step.as !== undefined) {
             threadIds.set(step.as, forked.thread.id);
@@ -1588,16 +1613,10 @@ const runReplaySession = Effect.fn("record-codex-app-server-replay-fixture.runRe
         if (turnThreadId === undefined) {
           throw new Error(`Unknown replay thread alias '${threadAlias}'.`);
         }
-        yield* runTurnStep(client, turnThreadId, step);
+        yield* runTurnStep(clientFor(turnThreadId), turnThreadId, step);
         void stepIndex;
       }
-    }).pipe(
-      Effect.provide(
-        layerCodex({
-          recorder,
-        }),
-      ),
-    );
+    }).pipe(Effect.scoped);
   },
 );
 

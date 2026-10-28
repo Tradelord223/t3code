@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as PlatformError from "effect/PlatformError";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -185,29 +186,58 @@ export function layer(input: {
   readonly transcript: CodexReplay.CodexAppServerReplayTranscript;
   readonly driver?: CodexReplay.CodexAppServerReplayDriver;
 }) {
-  const layerReplay =
-    input.driver === undefined
-      ? CodexReplay.layerReplay(input.transcript)
-      : CodexReplay.layerReplayWithDriver(input.driver);
-  const layerReplayClientFactory = Layer.succeed(CodexAdapterV2.CodexAppServerClientFactory, {
-    open: (openInput) =>
-      Effect.gen(function* () {
-        const context = yield* Layer.build(layerReplay).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProviderAdapter.ProviderAdapterOpenSessionError({
+  const connections = CodexReplay.splitReplayConnections(input.transcript);
+  const layerReplayClientFactory = Layer.effect(
+    CodexAdapterV2.CodexAppServerClientFactory,
+    Effect.gen(function* () {
+      // Each thread runs its own app-server, so the Nth session opened plays the
+      // Nth recorded process. A single-process recording serves every session.
+      const drivers =
+        connections.length === 1
+          ? undefined
+          : yield* Effect.forEach(connections, (connection) =>
+              CodexReplay.makeReplayDriver(
+                connection,
+                input.driver?.beforeEmitInbound === undefined
+                  ? {}
+                  : { beforeEmitInbound: input.driver.beforeEmitInbound },
+              ),
+            );
+      const opened = yield* Ref.make(0);
+      return CodexAdapterV2.CodexAppServerClientFactory.of({
+        open: (openInput) =>
+          Effect.gen(function* () {
+            const index = yield* Ref.getAndUpdate(opened, (count) => count + 1);
+            const driver = drivers === undefined ? input.driver : drivers[index];
+            if (drivers !== undefined && driver === undefined) {
+              return yield* new ProviderAdapter.ProviderAdapterOpenSessionError({
                 driver: CodexAdapterV2.CODEX_DRIVER_KIND,
                 providerSessionId: openInput.providerSessionId,
-                cause,
-              }),
-          ),
-        );
-        return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
-          Effect.map((client) => withCodexReplayChildMetadata(client, input.transcript)),
-          Effect.provide(context),
-        );
-      }),
-  });
+                cause: `The replay recorded ${drivers.length} app-servers; session ${index + 1} has none.`,
+              });
+            }
+            const layerReplay =
+              driver === undefined
+                ? CodexReplay.layerReplay(input.transcript)
+                : CodexReplay.layerReplayWithDriver(driver);
+            const context = yield* Layer.build(layerReplay).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapter.ProviderAdapterOpenSessionError({
+                    driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+                    providerSessionId: openInput.providerSessionId,
+                    cause,
+                  }),
+              ),
+            );
+            return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+              Effect.map((client) => withCodexReplayChildMetadata(client, input.transcript)),
+              Effect.provide(context),
+            );
+          }),
+      });
+    }),
+  );
   const layerServerConfig = Layer.effect(
     ServerConfig.ServerConfig,
     makeReplayServerConfig(input.transcript.scenario).pipe(Effect.orDie),
